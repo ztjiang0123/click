@@ -230,16 +230,35 @@ def _is_compatible_text_stream(
     ) and _is_compat_stream_attr(stream, "errors", errors)
 
 
+class _BinaryStreamStrategy(t.NamedTuple):
+    """How to detect and recover the binary stream backing a text stream.
+
+    The reader and writer directions each bundle a matched detection pair
+    plus the corresponding ``force_*`` flag, so :func:`_force_correct_text_stream`
+    takes a single strategy instead of four loosely related arguments.
+    """
+
+    is_binary: t.Callable[[t.IO[t.Any], bool], bool]
+    find_binary: t.Callable[[t.IO[t.Any]], t.BinaryIO | None]
+    force_readable: bool = False
+    force_writable: bool = False
+
+
+_READER_STRATEGY = _BinaryStreamStrategy(
+    _is_binary_reader, _find_binary_reader, force_readable=True
+)
+_WRITER_STRATEGY = _BinaryStreamStrategy(
+    _is_binary_writer, _find_binary_writer, force_writable=True
+)
+
+
 def _force_correct_text_stream(
     text_stream: t.IO[t.Any],
     encoding: str | None,
     errors: str | None,
-    is_binary: t.Callable[[t.IO[t.Any], bool], bool],
-    find_binary: t.Callable[[t.IO[t.Any]], t.BinaryIO | None],
-    force_readable: bool = False,
-    force_writable: bool = False,
+    strategy: _BinaryStreamStrategy,
 ) -> t.TextIO:
-    if is_binary(text_stream, False):
+    if strategy.is_binary(text_stream, False):
         binary_reader = t.cast(t.BinaryIO, text_stream)
     else:
         text_stream = t.cast(t.TextIO, text_stream)
@@ -251,7 +270,7 @@ def _force_correct_text_stream(
             return text_stream
 
         # Otherwise, get the underlying binary reader.
-        possible_binary_reader = find_binary(text_stream)
+        possible_binary_reader = strategy.find_binary(text_stream)
 
         # If that's not possible, silently use the original reader
         # and get mojibake instead of exceptions.
@@ -271,40 +290,8 @@ def _force_correct_text_stream(
         binary_reader,
         encoding,
         errors,
-        force_readable=force_readable,
-        force_writable=force_writable,
-    )
-
-
-def _force_correct_text_reader(
-    text_reader: t.IO[t.Any],
-    encoding: str | None,
-    errors: str | None,
-    force_readable: bool = False,
-) -> t.TextIO:
-    return _force_correct_text_stream(
-        text_reader,
-        encoding,
-        errors,
-        _is_binary_reader,
-        _find_binary_reader,
-        force_readable=force_readable,
-    )
-
-
-def _force_correct_text_writer(
-    text_writer: t.IO[t.Any],
-    encoding: str | None,
-    errors: str | None,
-    force_writable: bool = False,
-) -> t.TextIO:
-    return _force_correct_text_stream(
-        text_writer,
-        encoding,
-        errors,
-        _is_binary_writer,
-        _find_binary_writer,
-        force_writable=force_writable,
+        force_readable=strategy.force_readable,
+        force_writable=strategy.force_writable,
     )
 
 
@@ -343,9 +330,8 @@ def _get_text_stream(
     rv = _get_windows_console_stream(stream, encoding, errors)
     if rv is not None:
         return rv
-    if readable:
-        return _force_correct_text_reader(stream, encoding, errors, force_readable=True)
-    return _force_correct_text_writer(stream, encoding, errors, force_writable=True)
+    strategy = _READER_STRATEGY if readable else _WRITER_STRATEGY
+    return _force_correct_text_stream(stream, encoding, errors, strategy)
 
 
 def get_text_stdin(encoding: str | None = None, errors: str | None = None) -> t.TextIO:

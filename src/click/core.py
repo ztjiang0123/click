@@ -888,17 +888,7 @@ class Context:
 
             for param in other_cmd.params:
                 if param.name not in kwargs and param.expose_value:
-                    default_value = param.get_default(ctx)
-                    # We explicitly hide the :attr:`UNSET` value to the user, as we
-                    # choose to make it an implementation detail. And because ``invoke``
-                    # has been designed as part of Click public API, we return ``None``
-                    # instead. Refs:
-                    # https://github.com/pallets/click/issues/3066
-                    # https://github.com/pallets/click/issues/3065
-                    # https://github.com/pallets/click/pull/3068
-                    if default_value is UNSET:
-                        default_value = None
-                    kwargs[param.name] = param.type_cast_value(ctx, default_value)
+                    kwargs[param.name] = self._invoke_param_default(ctx, param)
 
             # Track all kwargs as params, so that forward() will pass
             # them on in subsequent calls.
@@ -908,6 +898,23 @@ class Context:
 
         with augment_usage_errors(self), ctx:
             return callback(*args, **kwargs)
+
+    @staticmethod
+    def _invoke_param_default(ctx: Context, param: Parameter) -> t.Any:
+        """Resolve and type-cast the default value used to fill in a missing
+        argument for :meth:`invoke`.
+        """
+        default_value = param.get_default(ctx)
+        # We explicitly hide the :attr:`UNSET` value to the user, as we
+        # choose to make it an implementation detail. And because ``invoke``
+        # has been designed as part of Click public API, we return ``None``
+        # instead. Refs:
+        # https://github.com/pallets/click/issues/3066
+        # https://github.com/pallets/click/issues/3065
+        # https://github.com/pallets/click/pull/3068
+        if default_value is UNSET:
+            default_value = None
+        return param.type_cast_value(ctx, default_value)
 
     def forward(self, cmd: Command, /, *args: t.Any, **kwargs: t.Any) -> t.Any:
         """Similar to :meth:`invoke` but fills in default keyword
@@ -1467,7 +1474,9 @@ class Command:
         args: cabc.Sequence[str] | None = None,
         prog_name: str | None = None,
         complete_var: str | None = None,
+        *,
         standalone_mode: t.Literal[True] = True,
+        windows_expand_args: bool = True,
         **extra: t.Any,
     ) -> t.NoReturn: ...
 
@@ -1477,7 +1486,9 @@ class Command:
         args: cabc.Sequence[str] | None = None,
         prog_name: str | None = None,
         complete_var: str | None = None,
+        *,
         standalone_mode: bool = ...,
+        windows_expand_args: bool = True,
         **extra: t.Any,
     ) -> t.Any: ...
 
@@ -1486,8 +1497,6 @@ class Command:
         args: cabc.Sequence[str] | None = None,
         prog_name: str | None = None,
         complete_var: str | None = None,
-        standalone_mode: bool = True,
-        windows_expand_args: bool = True,
         **extra: t.Any,
     ) -> t.Any:
         """This is the way to invoke a script with all the bells and
@@ -1532,6 +1541,13 @@ class Command:
         .. versionchanged:: 3.0
            Added the ``standalone_mode`` parameter.
         """
+        # ``standalone_mode`` and ``windows_expand_args`` configure how this
+        # method runs and are never forwarded to the context, so they are
+        # accepted as keyword arguments (see the typed overloads above) and
+        # separated from the ``extra`` context arguments here.
+        standalone_mode: bool = extra.pop("standalone_mode", True)
+        windows_expand_args: bool = extra.pop("windows_expand_args", True)
+
         args = self._resolve_main_args(args, windows_expand_args)
 
         if prog_name is None:

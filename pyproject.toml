@@ -134,6 +134,13 @@ select = [
     "ICN", #flake8-import-conventions (ICN)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# ``_winconsole`` is a Windows-only module. Its ``ctypes.windll`` based
+# imports must follow the ``assert sys.platform == "win32"`` guard so that
+# static type checkers narrow the platform before the imports are analyzed,
+# which unavoidably places them after a statement (E402).
+"src/click/_winconsole.py" = ["E402"]
+
 [tool.ruff.lint.flake8-import-conventions.aliases]
 # Declare the default aliases.
 typing = "t"
