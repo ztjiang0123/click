@@ -36,6 +36,7 @@ from .formatting import join_options
 from .globals import pop_context
 from .globals import push_context
 from .parser import _OptionParser
+from .parser import _OptionSpec
 from .parser import _split_opt
 from .termui import confirm
 from .termui import prompt
@@ -3350,33 +3351,45 @@ class Option(Parameter):
 
             if self.is_bool_flag and self.secondary_opts:
                 parser.add_option(
-                    obj=self, opts=self.opts, dest=self.name, action=action, const=True
+                    _OptionSpec(
+                        obj=self,
+                        opts=self.opts,
+                        dest=self.name,
+                        action=action,
+                        const=True,
+                    )
                 )
                 parser.add_option(
-                    obj=self,
-                    opts=self.secondary_opts,
-                    dest=self.name,
-                    action=action,
-                    const=False,
+                    _OptionSpec(
+                        obj=self,
+                        opts=self.secondary_opts,
+                        dest=self.name,
+                        action=action,
+                        const=False,
+                    )
                 )
             else:
                 parser.add_option(
+                    _OptionSpec(
+                        obj=self,
+                        opts=self.opts,
+                        dest=self.name,
+                        action=action,
+                        # ``flag_activation_value`` resolves UNSET to the right
+                        # parser-store constant (``True`` for bool flags) so the raw
+                        # :attr:`flag_value` can keep the sentinel.
+                        const=self.flag_activation_value,
+                    )
+                )
+        else:
+            parser.add_option(
+                _OptionSpec(
                     obj=self,
                     opts=self.opts,
                     dest=self.name,
                     action=action,
-                    # ``flag_activation_value`` resolves UNSET to the right parser-store
-                    # constant (``True`` for bool flags) so the raw :attr:`flag_value`
-                    # can keep the sentinel.
-                    const=self.flag_activation_value,
+                    nargs=self.nargs,
                 )
-        else:
-            parser.add_option(
-                obj=self,
-                opts=self.opts,
-                dest=self.name,
-                action=action,
-                nargs=self.nargs,
             )
 
     def get_help_record(self, ctx: Context) -> tuple[str, str] | None:
