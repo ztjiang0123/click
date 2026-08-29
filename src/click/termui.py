@@ -325,7 +325,6 @@ def confirm(
     text: str,
     default: bool | None = False,
     abort: bool = False,
-    *,
     display: ConfirmDisplay = _DEFAULT_CONFIRM_DISPLAY,
     err: bool = False,
 ) -> bool:
@@ -346,8 +345,7 @@ def confirm(
 
     .. versionchanged:: 8.5.1
         The ``prompt_suffix`` and ``show_default`` options are grouped
-        into the keyword-only ``display`` parameter, and ``err`` is now
-        keyword-only.
+        into the ``display`` parameter.
 
     .. versionchanged:: 8.3.1
         A space is no longer appended to the prompt.
