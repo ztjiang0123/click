@@ -27,6 +27,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import typing as t
 from collections import deque
+from dataclasses import dataclass
 from gettext import gettext as _
 from gettext import ngettext
 
@@ -221,6 +222,23 @@ class _ParsingState:
         self.order: list[CoreParameter] = []
 
 
+@dataclass(frozen=True)
+class _OptionSpec:
+    """The specification for a single option to add to :class:`_OptionParser`.
+
+    These values describe one option and always travel together, so they
+    are grouped into a value type rather than being passed as a long list
+    of positional/keyword arguments.
+    """
+
+    obj: CoreOption
+    opts: cabc.Sequence[str]
+    dest: str | None
+    action: str | None = None
+    nargs: int = 1
+    const: t.Any | None = None
+
+
 class _OptionParser:
     """The option parser is an internal class that is ultimately used to
     parse options and arguments.  It's modelled after optparse and brings
@@ -262,25 +280,24 @@ class _OptionParser:
         self._opt_prefixes = {"-", "--"}
         self._args: list[_Argument] = []
 
-    def add_option(
-        self,
-        obj: CoreOption,
-        opts: cabc.Sequence[str],
-        dest: str | None,
-        action: str | None = None,
-        nargs: int = 1,
-        const: t.Any | None = None,
-    ) -> None:
-        """Adds a new option named `dest` to the parser.  The destination
-        is not inferred (unlike with optparse) and needs to be explicitly
-        provided.  Action can be any of ``store``, ``store_const``,
+    def add_option(self, spec: _OptionSpec) -> None:
+        """Adds a new option described by ``spec`` to the parser.  The
+        destination is not inferred (unlike with optparse) and needs to be
+        explicitly provided.  Action can be any of ``store``, ``store_const``,
         ``append``, ``append_const`` or ``count``.
 
-        The `obj` can be used to identify the option in the order list
+        The ``spec.obj`` can be used to identify the option in the order list
         that is returned from the parser.
         """
-        opts = [_normalize_opt(opt, self.ctx) for opt in opts]
-        option = _Option(obj, opts, dest, action=action, nargs=nargs, const=const)
+        opts = [_normalize_opt(opt, self.ctx) for opt in spec.opts]
+        option = _Option(
+            spec.obj,
+            opts,
+            spec.dest,
+            action=spec.action,
+            nargs=spec.nargs,
+            const=spec.const,
+        )
         self._opt_prefixes.update(option.prefixes)
         for opt in option._short_opts:
             self._short_opt[opt] = option

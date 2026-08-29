@@ -421,9 +421,6 @@ def password_option(*param_decls: str, **kwargs: t.Any) -> t.Callable[[FC], FC]:
 def version_option(
     version: str | None = None,
     *param_decls: str,
-    package_name: str | None = None,
-    prog_name: str | None = None,
-    message: str | None = None,
     **kwargs: t.Any,
 ) -> t.Callable[[FC], FC]:
     """Add a ``--version`` option which immediately prints the version
@@ -478,6 +475,14 @@ def version_option(
         When ``package_name`` does not match an installed distribution,
         Click now resolves it as an import (top-level module).
     """
+    # The display-configuration values travel together and are pulled out
+    # of ``kwargs`` so the public signature stays short while keeping full
+    # backward compatibility for callers passing them by keyword. Any other
+    # unexpected keyword still flows through to :func:`option`, which raises.
+    package_name: str | None = kwargs.pop("package_name", None)
+    prog_name: str | None = kwargs.pop("prog_name", None)
+    message: str | None = kwargs.pop("message", None)
+
     if message is None:
         message = _("%(prog)s, version %(version)s")
 
