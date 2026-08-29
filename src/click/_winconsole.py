@@ -33,9 +33,9 @@ from gettext import gettext as _
 from ._compat import _NonClosingTextIOWrapper
 
 assert sys.platform == "win32"
-import msvcrt  # noqa: E402
-from ctypes import windll  # noqa: E402
-from ctypes import WINFUNCTYPE  # noqa: E402
+import msvcrt
+from ctypes import windll
+from ctypes import WINFUNCTYPE
 
 c_ssize_p = POINTER(c_ssize_t)
 
@@ -86,7 +86,7 @@ except ImportError:
 else:
 
     class Py_buffer(Structure):
-        _fields_ = [  # noqa: RUF012
+        _fields_ = [
             ("buf", c_void_p),
             ("obj", py_object),
             ("len", c_ssize_t),
