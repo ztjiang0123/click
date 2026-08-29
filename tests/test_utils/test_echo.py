@@ -139,7 +139,10 @@ def test_echo_writing_to_standard_error(capfd, monkeypatch):
     assert err == ""
 
     emulate_input("y\n")
-    click.confirm("Prompt to stdin with no suffix", prompt_suffix="")
+    click.confirm(
+        "Prompt to stdin with no suffix",
+        display=click.ConfirmDisplay(prompt_suffix=""),
+    )
     out, err = capfd.readouterr()
     assert out == "Prompt to stdin with no suffix [y/N]"
     assert err == ""
@@ -153,7 +156,11 @@ def test_echo_writing_to_standard_error(capfd, monkeypatch):
 
     # https://github.com/pallets/click/issues/3019
     emulate_input("y\n")
-    click.confirm("Prompt to stderr with no suffix", prompt_suffix="", err=True)
+    click.confirm(
+        "Prompt to stderr with no suffix",
+        display=click.ConfirmDisplay(prompt_suffix=""),
+        err=True,
+    )
     out, err = capfd.readouterr()
     assert out == ""
     assert err == "Prompt to stderr with no suffix [y/N]"

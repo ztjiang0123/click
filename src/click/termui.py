@@ -105,23 +105,37 @@ def _readline_prompt(func: t.Callable[[str], str], text: str, err: bool) -> str:
     return func(text)
 
 
+class _PromptDefaults(t.NamedTuple):
+    """Rendering hints for how :func:`_build_prompt` displays the default
+    value and any available choices. These options travel together, so
+    they are grouped into a single value instead of separate parameters.
+    """
+
+    show_default: bool | str = False
+    default: object | None = None
+    show_choices: bool = True
+    type: object | None = None
+
+
+_DEFAULT_PROMPT_DEFAULTS = _PromptDefaults()
+
+
 def _build_prompt(
     text: str,
     suffix: str,
-    show_default: bool | str = False,
-    default: object | None = None,
-    show_choices: bool = True,
-    type: object | None = None,
+    defaults: _PromptDefaults = _DEFAULT_PROMPT_DEFAULTS,
 ) -> str:
     prompt = text
-    if type is not None and show_choices and isinstance(type, Choice):
+    type = defaults.type
+    if type is not None and defaults.show_choices and isinstance(type, Choice):
         prompt += f" ({', '.join(map(str, type.choices))})"
     default_preview = ""
+    show_default = defaults.show_default
     if show_default:
         if isinstance(show_default, str):
             default_preview = f" [({show_default})]"
-        elif default is not None:
-            default_preview = f" [{_format_default(default)}]"
+        elif defaults.default is not None:
+            default_preview = f" [{_format_default(defaults.default)}]"
     return f"{prompt}{default_preview}{suffix}"
 
 
@@ -248,7 +262,9 @@ def prompt(
         value_proc = convert_type(type, default)
 
     prompt = _build_prompt(
-        text, prompt_suffix, show_default, default, show_choices, type
+        text,
+        prompt_suffix,
+        _PromptDefaults(show_default, default, show_choices, type),
     )
 
     if confirmation_prompt:
@@ -286,12 +302,30 @@ def prompt(
         echo(_("Error: The two entered values do not match."), err=err)
 
 
+class ConfirmDisplay(t.NamedTuple):
+    """Controls how :func:`confirm` renders its prompt.
+
+    Groups the two prompt-rendering options that always travel together,
+    so they can be passed as one keyword argument.
+
+    :param prompt_suffix: a suffix that should be added to the prompt.
+    :param show_default: shows or hides the default value in the prompt.
+
+    .. versionadded:: 8.5.1
+    """
+
+    prompt_suffix: str = ": "
+    show_default: bool = True
+
+
+_DEFAULT_CONFIRM_DISPLAY = ConfirmDisplay()
+
+
 def confirm(
     text: str,
     default: bool | None = False,
     abort: bool = False,
-    prompt_suffix: str = ": ",
-    show_default: bool = True,
+    display: ConfirmDisplay = _DEFAULT_CONFIRM_DISPLAY,
     err: bool = False,
 ) -> bool:
     """Prompts for confirmation (yes/no question).
@@ -304,10 +338,14 @@ def confirm(
         ``None``, repeat until input is given.
     :param abort: if this is set to `True` a negative answer aborts the
                   exception by raising :exc:`Abort`.
-    :param prompt_suffix: a suffix that should be added to the prompt.
-    :param show_default: shows or hides the default value in the prompt.
+    :param display: prompt-rendering options grouping ``prompt_suffix``
+        and ``show_default``. See :class:`ConfirmDisplay`.
     :param err: if set to true the file defaults to ``stderr`` instead of
                 ``stdout``, the same as with echo.
+
+    .. versionchanged:: 8.5.1
+        The ``prompt_suffix`` and ``show_default`` options are grouped
+        into the ``display`` parameter.
 
     .. versionchanged:: 8.3.1
         A space is no longer appended to the prompt.
@@ -320,9 +358,11 @@ def confirm(
     """
     prompt = _build_prompt(
         text,
-        prompt_suffix,
-        show_default,
-        "y/n" if default is None else ("Y/n" if default else "y/N"),
+        display.prompt_suffix,
+        _PromptDefaults(
+            display.show_default,
+            "y/n" if default is None else ("Y/n" if default else "y/N"),
+        ),
     )
 
     while True:
