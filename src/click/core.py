@@ -1300,25 +1300,27 @@ class Command:
             with formatter.indentation():
                 formatter.write_text(text)
 
-    def _format_param_section(
+    def _write_param_section(
         self,
         ctx: Context,
         formatter: HelpFormatter,
         section_title: str,
-        include_arguments: bool,
+        want_argument: bool,
     ) -> None:
-        """Writes the help records for a subset of the params into a section.
+        """Collects the help records for either the positional arguments or
+        the options and writes them under ``section_title``.
 
-        ``include_arguments`` selects whether positional
-        :class:`Argument` params (``True``) or the remaining options
-        (``False``) are collected. Params without a help record and empty
-        sections are skipped.
+        ``want_argument`` picks which params are included: ``True`` keeps
+        the positional :class:`Argument` params and ``False`` keeps the
+        remaining options. Params without a help record are skipped, and an
+        empty selection writes nothing.
         """
-        records = []
-        for param in self.get_params(ctx):
-            rv = param.get_help_record(ctx)
-            if rv is not None and isinstance(param, Argument) == include_arguments:
-                records.append(rv)
+        records = [
+            rv
+            for param in self.get_params(ctx)
+            if (rv := param.get_help_record(ctx)) is not None
+            and isinstance(param, Argument) is want_argument
+        ]
 
         if records:
             with formatter.section(section_title):
@@ -1326,15 +1328,12 @@ class Command:
 
     def format_options(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes all the options into the formatter if they exist."""
-        self._format_param_section(
-            ctx, formatter, _("Options"), include_arguments=False
-        )
+        self._write_param_section(ctx, formatter, _("Options"), want_argument=False)
 
     def format_arguments(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes the arguments that have a help record into the formatter."""
-        self._format_param_section(
-            ctx, formatter, _("Positional arguments"), include_arguments=True
-        )
+        title = _("Positional arguments")
+        self._write_param_section(ctx, formatter, title, want_argument=True)
 
     def format_epilog(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes the epilog into the formatter if it exists."""
