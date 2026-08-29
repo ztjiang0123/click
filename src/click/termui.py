@@ -779,14 +779,12 @@ def unstyle(text: str) -> str:
     return strip_ansi(text)
 
 
-def secho(
-    message: t.Any | None = None,
-    file: t.IO[t.AnyStr] | None = None,
-    nl: bool = True,
-    err: bool = False,
-    color: bool | None = None,
-    **styles: t.Any,
-) -> None:
+# Keyword arguments accepted by :func:`echo`. Any other keyword passed to
+# :func:`secho` is forwarded to :func:`style` instead.
+_ECHO_KWARGS = ("file", "nl", "err", "color")
+
+
+def secho(message: t.Any | None = None, **kwargs: t.Any) -> None:
     """This function combines :func:`echo` and :func:`style` into one
     call.  As such the following two calls are the same::
 
@@ -794,7 +792,9 @@ def secho(
         click.echo(click.style('Hello World!', fg='green'))
 
     All keyword arguments are forwarded to the underlying functions
-    depending on which one they go with.
+    depending on which one they go with. The ``file``, ``nl``, ``err``,
+    and ``color`` keywords go to :func:`echo`; any remaining keywords
+    (such as ``fg`` or ``bold``) go to :func:`style`.
 
     Non-string types will be converted to :class:`str`. However,
     :class:`bytes` are passed directly to :meth:`echo` without applying
@@ -807,10 +807,12 @@ def secho(
 
     .. versionadded:: 2.0
     """
-    if message is not None and not isinstance(message, (bytes, bytearray)):
-        message = style(message, **styles)
+    echo_kwargs = {k: kwargs.pop(k) for k in _ECHO_KWARGS if k in kwargs}
 
-    return echo(message, file=file, nl=nl, err=err, color=color)
+    if message is not None and not isinstance(message, (bytes, bytearray)):
+        message = style(message, **kwargs)
+
+    return echo(message, **echo_kwargs)
 
 
 @t.overload
@@ -849,14 +851,12 @@ def edit(
 
 def edit(
     text: str | bytes | bytearray | None = None,
-    editor: str | None = None,
-    env: cabc.Mapping[str, str] | None = None,
-    require_save: bool = True,
-    extension: str = ".txt",
+    *args: t.Any,
     filename: str
     | os.PathLike[str]
     | cabc.Iterable[str | os.PathLike[str]]
     | None = None,
+    **kwargs: t.Any,
 ) -> str | bytes | bytearray | None:
     r"""Edits the given text in the defined editor.  If an editor is given
     (should be the full path to the executable but the regular operating
@@ -900,7 +900,14 @@ def edit(
     """
     from ._termui_impl import Editor
 
-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
+    # ``editor``, ``env``, ``require_save`` and ``extension`` configure the
+    # editor and travel together into ``Editor``. They are accepted either
+    # positionally or by keyword; bind them here and hand them to ``Editor``.
+    editor_params = ("editor", "env", "require_save", "extension")
+    editor_config = dict(zip(editor_params, args, strict=False))
+    editor_config.update(kwargs)
+
+    ed = Editor(**editor_config)
 
     if filename is None:
         return ed.edit(text)

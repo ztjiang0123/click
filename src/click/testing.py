@@ -228,6 +228,19 @@ def make_input_stream(
     return io.BytesIO(input)
 
 
+def _set_env(key: str, value: str | None) -> None:
+    """Apply a single environment override. A value of ``None`` removes
+    the variable if present, ignoring the case where it is already unset.
+    """
+    if value is None:
+        try:
+            del os.environ[key]
+        except Exception:
+            pass
+    else:
+        os.environ[key] = value
+
+
 class Result:
     """Holds the captured result of an invoked CLI script.
 
@@ -565,23 +578,11 @@ class CliRunner:
         try:
             for key, value in env.items():
                 old_env[key] = os.environ.get(key)
-                if value is None:
-                    try:
-                        del os.environ[key]
-                    except Exception:
-                        pass
-                else:
-                    os.environ[key] = value
+                _set_env(key, value)
             yield (stream_mixer.stdout, stream_mixer.stderr, stream_mixer.output)
         finally:
             for key, value in old_env.items():
-                if value is None:
-                    try:
-                        del os.environ[key]
-                    except Exception:
-                        pass
-                else:
-                    os.environ[key] = value
+                _set_env(key, value)
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             sys.stdin = old_stdin
