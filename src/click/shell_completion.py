@@ -693,6 +693,51 @@ def _is_incomplete_option(ctx: Context, args: list[str], param: Parameter) -> bo
     return last_option is not None and last_option in param.opts
 
 
+def _resolve_group_command(
+    ctx: Context, command: Group, args: list[str]
+) -> tuple[Context, list[str]] | None:
+    """Advance one step into a non-chained group, entering the resolved
+    subcommand's context. Returns the new context and remaining args, or
+    ``None`` if the command could not be resolved.
+    """
+    name, cmd, args = command.resolve_command(ctx, args)
+
+    if cmd is None:
+        return None
+
+    with cmd.make_context(name, args, parent=ctx, resilient_parsing=True) as sub_ctx:
+        return sub_ctx, sub_ctx._protected_args + sub_ctx.args
+
+
+def _resolve_chain_command(
+    ctx: Context, command: Group, args: list[str]
+) -> tuple[Context, list[str]] | None:
+    """Consume all args for a chained group, entering each resolved
+    subcommand's context in turn. Returns the last subcommand's context
+    and remaining args, or ``None`` if a command could not be resolved.
+    """
+    sub_ctx = ctx
+
+    while args:
+        name, cmd, args = command.resolve_command(ctx, args)
+
+        if cmd is None:
+            return None
+
+        with cmd.make_context(
+            name,
+            args,
+            parent=ctx,
+            allow_extra_args=True,
+            allow_interspersed_args=False,
+            resilient_parsing=True,
+        ) as sub_sub_ctx:
+            sub_ctx = sub_sub_ctx
+            args = sub_ctx.args
+
+    return sub_ctx, [*sub_ctx._protected_args, *sub_ctx.args]
+
+
 def _resolve_context(
     cli: Command,
     ctx_args: cabc.MutableMapping[str, t.Any],
@@ -714,42 +759,18 @@ def _resolve_context(
         while args:
             command = ctx.command
 
-            if isinstance(command, Group):
-                if not command.chain:
-                    name, cmd, args = command.resolve_command(ctx, args)
-
-                    if cmd is None:
-                        return ctx
-
-                    with cmd.make_context(
-                        name, args, parent=ctx, resilient_parsing=True
-                    ) as sub_ctx:
-                        ctx = sub_ctx
-                        args = ctx._protected_args + ctx.args
-                else:
-                    sub_ctx = ctx
-
-                    while args:
-                        name, cmd, args = command.resolve_command(ctx, args)
-
-                        if cmd is None:
-                            return ctx
-
-                        with cmd.make_context(
-                            name,
-                            args,
-                            parent=ctx,
-                            allow_extra_args=True,
-                            allow_interspersed_args=False,
-                            resilient_parsing=True,
-                        ) as sub_sub_ctx:
-                            sub_ctx = sub_sub_ctx
-                            args = sub_ctx.args
-
-                    ctx = sub_ctx
-                    args = [*sub_ctx._protected_args, *sub_ctx.args]
-            else:
+            if not isinstance(command, Group):
                 break
+
+            if command.chain:
+                resolved = _resolve_chain_command(ctx, command, args)
+            else:
+                resolved = _resolve_group_command(ctx, command, args)
+
+            if resolved is None:
+                return ctx
+
+            ctx, args = resolved
 
     return ctx
 
