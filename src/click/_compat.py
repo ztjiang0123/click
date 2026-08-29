@@ -173,40 +173,32 @@ def _is_binary_writer(stream: t.IO[t.Any], default: bool = False) -> bool:
     return True
 
 
-def _find_binary_reader(stream: t.IO[t.Any]) -> t.BinaryIO | None:
+def _find_binary_stream(
+    stream: t.IO[t.Any], is_binary: t.Callable[[t.IO[t.Any], bool], bool]
+) -> t.BinaryIO | None:
     # We need to figure out if the given stream is already binary.
     # This can happen because the official docs recommend detaching
     # the streams to get binary streams.  Some code might do this, so
     # we need to deal with this case explicitly.
-    if _is_binary_reader(stream, False):
+    if is_binary(stream, False):
         return t.cast(t.BinaryIO, stream)
 
     buf = getattr(stream, "buffer", None)
 
     # Same situation here; this time we assume that the buffer is
     # actually binary in case it's closed.
-    if buf is not None and _is_binary_reader(buf, True):
+    if buf is not None and is_binary(buf, True):
         return t.cast(t.BinaryIO, buf)
 
     return None
+
+
+def _find_binary_reader(stream: t.IO[t.Any]) -> t.BinaryIO | None:
+    return _find_binary_stream(stream, _is_binary_reader)
 
 
 def _find_binary_writer(stream: t.IO[t.Any]) -> t.BinaryIO | None:
-    # We need to figure out if the given stream is already binary.
-    # This can happen because the official docs recommend detaching
-    # the streams to get binary streams.  Some code might do this, so
-    # we need to deal with this case explicitly.
-    if _is_binary_writer(stream, False):
-        return t.cast(t.BinaryIO, stream)
-
-    buf = getattr(stream, "buffer", None)
-
-    # Same situation here; this time we assume that the buffer is
-    # actually binary in case it's closed.
-    if buf is not None and _is_binary_writer(buf, True):
-        return t.cast(t.BinaryIO, buf)
-
-    return None
+    return _find_binary_stream(stream, _is_binary_writer)
 
 
 def _stream_is_misconfigured(stream: t.TextIO) -> bool:
@@ -316,25 +308,29 @@ def _force_correct_text_writer(
     )
 
 
+def _get_binary_std_stream(
+    name: str,
+    stream: t.IO[t.Any],
+    find_binary: t.Callable[[t.IO[t.Any]], t.BinaryIO | None],
+) -> t.BinaryIO:
+    binary_stream = find_binary(stream)
+    if binary_stream is None:
+        raise RuntimeError(
+            f"Was not able to determine binary stream for sys.{name}."
+        )
+    return binary_stream
+
+
 def get_binary_stdin() -> t.BinaryIO:
-    reader = _find_binary_reader(sys.stdin)
-    if reader is None:
-        raise RuntimeError("Was not able to determine binary stream for sys.stdin.")
-    return reader
+    return _get_binary_std_stream("stdin", sys.stdin, _find_binary_reader)
 
 
 def get_binary_stdout() -> t.BinaryIO:
-    writer = _find_binary_writer(sys.stdout)
-    if writer is None:
-        raise RuntimeError("Was not able to determine binary stream for sys.stdout.")
-    return writer
+    return _get_binary_std_stream("stdout", sys.stdout, _find_binary_writer)
 
 
 def get_binary_stderr() -> t.BinaryIO:
-    writer = _find_binary_writer(sys.stderr)
-    if writer is None:
-        raise RuntimeError("Was not able to determine binary stream for sys.stderr.")
-    return writer
+    return _get_binary_std_stream("stderr", sys.stderr, _find_binary_writer)
 
 
 def _get_text_stream(
@@ -377,32 +373,24 @@ def _wrap_io_open(
     return open(file, mode, encoding=encoding, errors=errors)
 
 
-def open_stream(
-    filename: str | os.PathLike[str],
-    mode: str = "r",
-    encoding: str | None = None,
-    errors: str | None = "strict",
-    atomic: bool = False,
-) -> tuple[t.IO[t.Any], bool]:
-    binary = "b" in mode
-    filename = os.fspath(filename)
+def _open_std_stream(
+    mode: str, binary: bool, encoding: str | None, errors: str | None
+) -> t.IO[t.Any]:
+    """Open the appropriate standard stream for ``filename == "-"``."""
+    is_write = any(m in mode for m in ["w", "a", "x"])
 
-    # Standard streams first. These are simple because they ignore the
-    # atomic flag. Use fsdecode to handle Path("-").
-    if os.fsdecode(filename) == "-":
-        if any(m in mode for m in ["w", "a", "x"]):
-            if binary:
-                return get_binary_stdout(), False
-            return get_text_stdout(encoding=encoding, errors=errors), False
+    if is_write:
         if binary:
-            return get_binary_stdin(), False
-        return get_text_stdin(encoding=encoding, errors=errors), False
+            return get_binary_stdout()
+        return get_text_stdout(encoding=encoding, errors=errors)
 
-    # Non-atomic writes directly go out through the regular open functions.
-    if not atomic:
-        return _wrap_io_open(filename, mode, encoding, errors), True
+    if binary:
+        return get_binary_stdin()
+    return get_text_stdin(encoding=encoding, errors=errors)
 
-    # Some usability stuff for atomic writes
+
+def _check_atomic_mode(mode: str) -> None:
+    """Validate that ``mode`` is usable for an atomic write."""
     if "a" in mode:
         raise ValueError(
             "Appending to an existing file is not supported, because that"
@@ -415,6 +403,14 @@ def open_stream(
     if "w" not in mode:
         raise ValueError("Atomic writes only make sense with `w`-mode.")
 
+
+def _open_atomic_stream(
+    filename: str,
+    mode: str,
+    binary: bool,
+    encoding: str | None,
+    errors: str | None,
+) -> tuple[t.IO[t.Any], bool]:
     # Atomic writes are more complicated.  They work by opening a file
     # as a proxy in the same folder and then using the fdopen
     # functionality to wrap it in a Python file.  Then we wrap it in an
@@ -432,6 +428,18 @@ def open_stream(
     if binary:
         flags |= getattr(os, "O_BINARY", 0)
 
+    def _is_retryable(e: OSError) -> bool:
+        if e.errno == errno.EEXIST:
+            return True
+        # On Windows, opening the proxy inside a directory can fail with
+        # EACCES; retry as long as the target is a writable directory.
+        return (
+            os.name == "nt"
+            and e.errno == errno.EACCES
+            and os.path.isdir(e.filename)
+            and os.access(e.filename, os.W_OK)
+        )
+
     while True:
         tmp_filename = os.path.join(
             os.path.dirname(filename),
@@ -441,12 +449,7 @@ def open_stream(
             fd = os.open(tmp_filename, flags, 0o666 if perm is None else perm)
             break
         except OSError as e:
-            if e.errno == errno.EEXIST or (
-                os.name == "nt"
-                and e.errno == errno.EACCES
-                and os.path.isdir(e.filename)
-                and os.access(e.filename, os.W_OK)
-            ):
+            if _is_retryable(e):
                 continue
             raise
 
@@ -456,6 +459,31 @@ def open_stream(
     f = _wrap_io_open(fd, mode, encoding, errors)
     af = _AtomicFile(f, tmp_filename, os.path.realpath(filename))
     return t.cast(t.IO[t.Any], af), True
+
+
+def open_stream(
+    filename: str | os.PathLike[str],
+    mode: str = "r",
+    encoding: str | None = None,
+    errors: str | None = "strict",
+    atomic: bool = False,
+) -> tuple[t.IO[t.Any], bool]:
+    binary = "b" in mode
+    filename = os.fspath(filename)
+
+    # Standard streams first. These are simple because they ignore the
+    # atomic flag. Use fsdecode to handle Path("-").
+    if os.fsdecode(filename) == "-":
+        return _open_std_stream(mode, binary, encoding, errors), False
+
+    # Non-atomic writes directly go out through the regular open functions.
+    if not atomic:
+        return _wrap_io_open(filename, mode, encoding, errors), True
+
+    # Some usability stuff for atomic writes
+    _check_atomic_mode(mode)
+
+    return _open_atomic_stream(filename, mode, binary, encoding, errors)
 
 
 class _AtomicFile:
