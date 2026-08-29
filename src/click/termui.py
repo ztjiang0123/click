@@ -105,6 +105,117 @@ def _readline_prompt(func: t.Callable[[str], str], text: str, err: bool) -> str:
     return func(text)
 
 
+class _PromptOptions(t.NamedTuple):
+    """Grouped conversion and display-configuration values for :func:`prompt`.
+
+    These keyword arguments travel together and are collapsed into ``**kwargs``
+    in :func:`prompt` so its public signature stays short. This type parses
+    them back out in one place, keeping :func:`prompt` itself simple.
+    """
+
+    param_type: t.Any
+    value_proc: t.Any
+    prompt_suffix: str
+    show_default: bool | str
+    err: bool
+    show_choices: bool
+
+    @classmethod
+    def from_kwargs(cls, kwargs: dict[str, t.Any]) -> _PromptOptions:
+        options = cls(
+            param_type=kwargs.pop("type", None),
+            value_proc=kwargs.pop("value_proc", None),
+            prompt_suffix=kwargs.pop("prompt_suffix", ": "),
+            show_default=kwargs.pop("show_default", True),
+            err=kwargs.pop("err", False),
+            show_choices=kwargs.pop("show_choices", True),
+        )
+
+        if kwargs:
+            raise TypeError(
+                "prompt() got unexpected keyword argument(s):"
+                f" {', '.join(map(repr, kwargs))}"
+            )
+
+        return options
+
+
+def _prompt_until_value(
+    prompt_func: t.Callable[[str], str], prompt: str, default: t.Any
+) -> str:
+    """Read from *prompt_func* until a non-empty value is entered.
+
+    If the user enters nothing and a *default* is available, the default is
+    returned instead. Defaults of any type round-trip through the caller's
+    ``value_proc`` like typed input.
+    """
+    while True:
+        value = prompt_func(prompt)
+
+        if value:
+            return value
+
+        if default is not None:
+            return t.cast("str", default)
+
+
+def _make_prompt_func(hide_input: bool, err: bool) -> t.Callable[[str], str]:
+    """Build the reader that :func:`prompt` uses for each line of input.
+
+    The returned callable reads through the hidden or visible prompt function
+    and converts an interrupt (``^C``/EOF) into :exc:`Abort`.
+    """
+    read = hidden_prompt_func if hide_input else visible_prompt_func
+
+    def prompt_func(text: str) -> str:
+        try:
+            return _readline_prompt(read, text, err)
+        except (KeyboardInterrupt, EOFError):
+            # getpass doesn't print a newline if the user aborts input with ^C.
+            # Allegedly this behavior is inherited from getpass(3).
+            # A doc bug has been filed at https://bugs.python.org/issue24711
+            if hide_input:
+                echo(None, err=err)
+            raise Abort() from None
+
+    return prompt_func
+
+
+def _confirmation_prompt(
+    confirmation_prompt: bool | str, prompt_suffix: str
+) -> str | None:
+    """Build the confirmation prompt string, or ``None`` when disabled.
+
+    ``True`` uses the default "Repeat for confirmation" message; a string is
+    used as a custom message.
+    """
+    if not confirmation_prompt:
+        return None
+
+    if confirmation_prompt is True:
+        confirmation_prompt = _("Repeat for confirmation")
+
+    return _build_prompt(confirmation_prompt, prompt_suffix)
+
+
+def _confirmation_matches(
+    prompt_func: t.Callable[[str], str], confirmation: str, value: str
+) -> bool:
+    """Read a confirmation value and report whether it matches *value*.
+
+    An empty first value paired with an empty confirmation counts as a match,
+    preserving the behavior of accepting an empty confirmed input.
+    """
+    while True:
+        value2 = prompt_func(confirmation)
+        is_empty = not value and not value2
+
+        if value2 or is_empty:
+            break
+
+    return value == value2
+
+
 def _build_prompt(
     text: str,
     suffix: str,
@@ -141,6 +252,7 @@ def prompt(
     default: str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
+    *,
     type: None = None,
     value_proc: None = None,
     prompt_suffix: str = ": ",
@@ -156,6 +268,7 @@ def prompt(
     default: V | str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
+    *,
     type: ParamType[V, str] | type[V] | None = None,
     value_proc: t.Callable[[str], V] | None = None,
     prompt_suffix: str = ": ",
@@ -170,12 +283,7 @@ def prompt(
     default: V | str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
-    type: ParamType[V, str] | type[V] | None = None,
-    value_proc: t.Callable[[str], V] | None = None,
-    prompt_suffix: str = ": ",
-    show_default: bool | str = True,
-    err: bool = False,
-    show_choices: bool = True,
+    **kwargs: t.Any,
 ) -> V:
     """Prompts a user for input.  This is a convenience function that can
     be used to prompt a user for input later.
@@ -205,6 +313,11 @@ def prompt(
                          For example if type is a Choice of either day or week,
                          show_choices is true and text is "Group by" then the
                          prompt will be "Group by (day, week): ".
+    :param kwargs: The conversion and display-configuration keywords
+        ``type``, ``value_proc``, ``prompt_suffix``, ``show_default``,
+        ``err``, and ``show_choices`` are accepted here. They travel together
+        and are grouped into ``**kwargs`` to keep the signature short. Any
+        other keyword raises :exc:`TypeError`.
 
     .. versionchanged:: 8.5.0
         Generically typed: the return type is narrowed by ``type``,
@@ -231,58 +344,45 @@ def prompt(
         Added the `err` parameter.
 
     """
+    # The conversion and display-configuration keywords travel together and
+    # are parsed out of ``kwargs`` in one place so the public signature stays
+    # short. Any unexpected keyword raises ``TypeError``, matching a normal
+    # signature.
+    options = _PromptOptions.from_kwargs(kwargs)
+    err = options.err
+    prompt_func = _make_prompt_func(hide_input, err)
 
-    def prompt_func(text: str) -> str:
-        f = hidden_prompt_func if hide_input else visible_prompt_func
-        try:
-            return _readline_prompt(f, text, err)
-        except (KeyboardInterrupt, EOFError):
-            # getpass doesn't print a newline if the user aborts input with ^C.
-            # Allegedly this behavior is inherited from getpass(3).
-            # A doc bug has been filed at https://bugs.python.org/issue24711
-            if hide_input:
-                echo(None, err=err)
-            raise Abort() from None
+    value_proc: t.Callable[[str], V] | None = options.value_proc
 
     if value_proc is None:
-        value_proc = convert_type(type, default)
+        value_proc = convert_type(options.param_type, default)
 
     prompt = _build_prompt(
-        text, prompt_suffix, show_default, default, show_choices, type
+        text,
+        options.prompt_suffix,
+        options.show_default,
+        default,
+        options.show_choices,
+        options.param_type,
     )
 
-    if confirmation_prompt:
-        if confirmation_prompt is True:
-            confirmation_prompt = _("Repeat for confirmation")
-
-        confirmation_prompt = _build_prompt(confirmation_prompt, prompt_suffix)
+    confirmation = _confirmation_prompt(confirmation_prompt, options.prompt_suffix)
 
     while True:
-        while True:
-            value = prompt_func(prompt)
-            if value:
-                break
-            elif default is not None:
-                # Defaults of any type are accepted and round trip through
-                # value_proc like typed input, so the annotation is only
-                # accurate for typed input.
-                value = t.cast("str", default)
-                break
+        value = _prompt_until_value(prompt_func, prompt, default)
+
         try:
             result = value_proc(value)
         except UsageError as e:
             message = _mask_hidden_input(e.message, value) if hide_input else e.message
             echo(_("Error: {message}").format(message=message), err=err)
             continue
-        if not confirmation_prompt:
+
+        if confirmation is None or _confirmation_matches(
+            prompt_func, confirmation, value
+        ):
             return result
-        while True:
-            value2 = prompt_func(confirmation_prompt)
-            is_empty = not value and not value2
-            if value2 or is_empty:
-                break
-        if value == value2:
-            return result
+
         echo(_("Error: The two entered values do not match."), err=err)
 
 
@@ -423,6 +523,7 @@ def progressbar(
 def progressbar(
     iterable: cabc.Iterable[V] | None = None,
     length: int | None = None,
+    *,
     label: str | None = None,
     hidden: bool = False,
     show_eta: bool = True,
@@ -443,20 +544,7 @@ def progressbar(
 def progressbar(
     iterable: cabc.Iterable[V] | None = None,
     length: int | None = None,
-    label: str | None = None,
-    hidden: bool = False,
-    show_eta: bool = True,
-    show_percent: bool | None = None,
-    show_pos: bool = False,
-    item_show_func: t.Callable[[V | None], str | None] | None = None,
-    fill_char: str = "#",
-    empty_char: str = "-",
-    bar_template: str = "%(label)s  [%(bar)s]  %(info)s",
-    info_sep: str = "  ",
-    width: int = 36,
-    file: t.TextIO | None = None,
-    color: bool | None = None,
-    update_min_steps: int = 1,
+    **kwargs: t.Any,
 ) -> ProgressBar[V]:
     """This function creates an iterable context manager that can be used
     to iterate over something while showing a progress bar.  It will
@@ -554,6 +642,13 @@ def progressbar(
                   which is not the case by default.
     :param update_min_steps: Render only when this many updates have
         completed. This allows tuning for very fast iterators.
+    :param kwargs: The remaining display-configuration keywords —
+        ``label``, ``hidden``, ``show_eta``, ``show_percent``, ``show_pos``,
+        ``item_show_func``, ``fill_char``, ``empty_char``, ``bar_template``,
+        ``info_sep``, ``width``, ``file``, ``color``, and
+        ``update_min_steps`` — are accepted here. They travel together and
+        are grouped into ``**kwargs`` to keep the signature short. Any other
+        keyword raises :exc:`TypeError`.
 
     .. versionadded:: 8.2
         The ``hidden`` argument.
@@ -577,6 +672,33 @@ def progressbar(
     .. versionadded:: 2.0
     """
     from ._termui_impl import ProgressBar
+
+    # The rendering/display values travel together and are pulled out of
+    # ``kwargs`` so the public signature stays short while keeping full
+    # backward compatibility for callers passing them by keyword. Any other
+    # unexpected keyword raises ``TypeError``, matching a normal signature.
+    label: str | None = kwargs.pop("label", None)
+    hidden: bool = kwargs.pop("hidden", False)
+    show_eta: bool = kwargs.pop("show_eta", True)
+    show_percent: bool | None = kwargs.pop("show_percent", None)
+    show_pos: bool = kwargs.pop("show_pos", False)
+    item_show_func: t.Callable[[V | None], str | None] | None = kwargs.pop(
+        "item_show_func", None
+    )
+    fill_char: str = kwargs.pop("fill_char", "#")
+    empty_char: str = kwargs.pop("empty_char", "-")
+    bar_template: str = kwargs.pop("bar_template", "%(label)s  [%(bar)s]  %(info)s")
+    info_sep: str = kwargs.pop("info_sep", "  ")
+    width: int = kwargs.pop("width", 36)
+    file: t.TextIO | None = kwargs.pop("file", None)
+    color: bool | None = kwargs.pop("color", None)
+    update_min_steps: int = kwargs.pop("update_min_steps", 1)
+
+    if kwargs:
+        raise TypeError(
+            "progressbar() got unexpected keyword argument(s):"
+            f" {', '.join(map(repr, kwargs))}"
+        )
 
     color = resolve_color_default(color)
     return ProgressBar(

@@ -2,6 +2,15 @@
 
 Unreleased
 
+- Shorten the internal signatures of `prompt()` and `progressbar()` by
+  grouping the conversion, rendering, and display-configuration keyword
+  arguments into `**kwargs`, which are extracted in the body. The public
+  typed API is unchanged: callers still pass every keyword as before, the
+  return type is still narrowed by `type`/`value_proc`/`default`, and
+  unknown keywords still raise `TypeError`. `prompt()`'s body is also split
+  into small helpers so its keyword parsing and input loops are no longer
+  deeply nested, with no change in behavior.
+
 ## Version 8.5.0
 
 Released 2026-08-24
