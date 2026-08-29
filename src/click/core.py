@@ -1090,14 +1090,24 @@ class Command:
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.name}>"
 
+    def _format_to_str(
+        self,
+        ctx: Context,
+        format_method: cabc.Callable[[Context, HelpFormatter], None],
+    ) -> str:
+        """Runs a ``format_*`` method against a fresh formatter and returns
+        the rendered string with trailing newlines stripped.
+        """
+        formatter = ctx.make_formatter()
+        format_method(ctx, formatter)
+        return formatter.getvalue().rstrip("\n")
+
     def get_usage(self, ctx: Context) -> str:
         """Formats the usage line into a string and returns it.
 
         Calls :meth:`format_usage` internally.
         """
-        formatter = ctx.make_formatter()
-        self.format_usage(ctx, formatter)
-        return formatter.getvalue().rstrip("\n")
+        return self._format_to_str(ctx, self.format_usage)
 
     def get_params(self, ctx: Context) -> list[Parameter]:
         params = self.params
@@ -1235,9 +1245,7 @@ class Command:
 
         Calls :meth:`format_help` internally.
         """
-        formatter = ctx.make_formatter()
-        self.format_help(ctx, formatter)
-        return formatter.getvalue().rstrip("\n")
+        return self._format_to_str(ctx, self.format_help)
 
     def get_short_help_str(self, limit: int = 45) -> str:
         """Gets short help for the command or makes it by shortening the
@@ -1292,29 +1300,40 @@ class Command:
             with formatter.indentation():
                 formatter.write_text(text)
 
+    def _write_param_section(
+        self,
+        ctx: Context,
+        formatter: HelpFormatter,
+        section_title: str,
+        want_argument: bool,
+    ) -> None:
+        """Collects the help records for either the positional arguments or
+        the options and writes them under ``section_title``.
+
+        ``want_argument`` picks which params are included: ``True`` keeps
+        the positional :class:`Argument` params and ``False`` keeps the
+        remaining options. Params without a help record are skipped, and an
+        empty selection writes nothing.
+        """
+        records = [
+            rv
+            for param in self.get_params(ctx)
+            if (rv := param.get_help_record(ctx)) is not None
+            and isinstance(param, Argument) is want_argument
+        ]
+
+        if records:
+            with formatter.section(section_title):
+                formatter.write_dl(records)
+
     def format_options(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes all the options into the formatter if they exist."""
-        opts = []
-        for param in self.get_params(ctx):
-            rv = param.get_help_record(ctx)
-            if rv is not None and not isinstance(param, Argument):
-                opts.append(rv)
-
-        if opts:
-            with formatter.section(_("Options")):
-                formatter.write_dl(opts)
+        self._write_param_section(ctx, formatter, _("Options"), want_argument=False)
 
     def format_arguments(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes the arguments that have a help record into the formatter."""
-        args = []
-        for param in self.get_params(ctx):
-            rv = param.get_help_record(ctx)
-            if rv is not None and isinstance(param, Argument):
-                args.append(rv)
-
-        if args:
-            with formatter.section(_("Positional arguments")):
-                formatter.write_dl(args)
+        title = _("Positional arguments")
+        self._write_param_section(ctx, formatter, title, want_argument=True)
 
     def format_epilog(self, ctx: Context, formatter: HelpFormatter) -> None:
         """Writes the epilog into the formatter if it exists."""
