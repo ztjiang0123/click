@@ -3380,25 +3380,80 @@ class Option(Parameter):
 
         return ("; " if any_prefix_is_slash else " / ").join(rv), help
 
+    def _get_envvar_names(self, ctx: Context) -> tuple[str, ...] | None:
+        """Resolve the environment variable names shown in help, or
+        ``None`` when there are none to show."""
+        envvar = self.envvar
+
+        if envvar is None:
+            if (
+                self.allow_from_autoenv
+                and ctx.auto_envvar_prefix is not None
+                and self.name
+            ):
+                envvar = f"{ctx.auto_envvar_prefix}_{self.name.upper()}"
+
+        if envvar is None:
+            return None
+
+        if isinstance(envvar, str):
+            return (envvar,)
+
+        return tuple(str(d) for d in envvar)
+
+    def _resolve_show_default(self, ctx: Context) -> tuple[bool, bool]:
+        """Return ``(show_default, show_default_is_str)`` based on this
+        parameter's and the context's ``show_default`` settings."""
+        if self.show_default is not None:
+            if isinstance(self.show_default, str):
+                return True, True
+
+            return self.show_default, False
+
+        if ctx.show_default is not None:
+            return ctx.show_default, False
+
+        return False, False
+
+    def _format_default_string(
+        self, default_value: t.Any, show_default_is_str: bool
+    ) -> str:
+        """Render the default value into the string shown in help."""
+        if show_default_is_str:
+            return f"({self.show_default})"
+
+        if isinstance(default_value, (list, tuple)):
+            return ", ".join(str(d) for d in default_value)
+
+        if isinstance(default_value, enum.Enum):
+            return default_value.name
+
+        if inspect.isfunction(default_value):
+            return _("(dynamic)")
+
+        if self.is_bool_flag and self.secondary_opts:
+            # For boolean flags that have distinct True/False opts,
+            # use the opt without prefix instead of the value.
+            return _split_opt(
+                (self.opts if default_value else self.secondary_opts)[0]
+            )[1]
+
+        if self.is_bool_flag and not self.secondary_opts and not default_value:
+            return ""
+
+        if isinstance(default_value, str) and default_value == "":
+            return '""'
+
+        return str(default_value)
+
     def get_help_extra(self, ctx: Context) -> types.OptionHelpExtra:
         extra: types.OptionHelpExtra = {}
 
         if self.show_envvar:
-            envvar = self.envvar
+            envvars = self._get_envvar_names(ctx)
 
-            if envvar is None:
-                if (
-                    self.allow_from_autoenv
-                    and ctx.auto_envvar_prefix is not None
-                    and self.name
-                ):
-                    envvar = f"{ctx.auto_envvar_prefix}_{self.name.upper()}"
-
-            if envvar is not None:
-                if isinstance(envvar, str):
-                    extra["envvars"] = (envvar,)
-                else:
-                    extra["envvars"] = tuple(str(d) for d in envvar)
+            if envvars is not None:
+                extra["envvars"] = envvars
 
         # Temporarily enable resilient parsing to avoid type casting
         # failing for the default. Might be possible to extend this to
@@ -3411,40 +3466,14 @@ class Option(Parameter):
         finally:
             ctx.resilient_parsing = resilient
 
-        show_default = False
-        show_default_is_str = False
-
-        if self.show_default is not None:
-            if isinstance(self.show_default, str):
-                show_default_is_str = show_default = True
-            else:
-                show_default = self.show_default
-        elif ctx.show_default is not None:
-            show_default = ctx.show_default
+        show_default, show_default_is_str = self._resolve_show_default(ctx)
 
         if show_default_is_str or (
             show_default and (default_value not in (None, UNSET))
         ):
-            if show_default_is_str:
-                default_string = f"({self.show_default})"
-            elif isinstance(default_value, (list, tuple)):
-                default_string = ", ".join(str(d) for d in default_value)
-            elif isinstance(default_value, enum.Enum):
-                default_string = default_value.name
-            elif inspect.isfunction(default_value):
-                default_string = _("(dynamic)")
-            elif self.is_bool_flag and self.secondary_opts:
-                # For boolean flags that have distinct True/False opts,
-                # use the opt without prefix instead of the value.
-                default_string = _split_opt(
-                    (self.opts if default_value else self.secondary_opts)[0]
-                )[1]
-            elif self.is_bool_flag and not self.secondary_opts and not default_value:
-                default_string = ""
-            elif isinstance(default_value, str) and default_value == "":
-                default_string = '""'
-            else:
-                default_string = str(default_value)
+            default_string = self._format_default_string(
+                default_value, show_default_is_str
+            )
 
             if default_string:
                 extra["default"] = default_string
