@@ -337,25 +337,31 @@ def get_binary_stderr() -> t.BinaryIO:
     return writer
 
 
-def get_text_stdin(encoding: str | None = None, errors: str | None = None) -> t.TextIO:
-    rv = _get_windows_console_stream(sys.stdin, encoding, errors)
+def _get_text_stream(
+    stream: t.TextIO,
+    encoding: str | None,
+    errors: str | None,
+    *,
+    readable: bool,
+) -> t.TextIO:
+    rv = _get_windows_console_stream(stream, encoding, errors)
     if rv is not None:
         return rv
-    return _force_correct_text_reader(sys.stdin, encoding, errors, force_readable=True)
+    if readable:
+        return _force_correct_text_reader(stream, encoding, errors, force_readable=True)
+    return _force_correct_text_writer(stream, encoding, errors, force_writable=True)
+
+
+def get_text_stdin(encoding: str | None = None, errors: str | None = None) -> t.TextIO:
+    return _get_text_stream(sys.stdin, encoding, errors, readable=True)
 
 
 def get_text_stdout(encoding: str | None = None, errors: str | None = None) -> t.TextIO:
-    rv = _get_windows_console_stream(sys.stdout, encoding, errors)
-    if rv is not None:
-        return rv
-    return _force_correct_text_writer(sys.stdout, encoding, errors, force_writable=True)
+    return _get_text_stream(sys.stdout, encoding, errors, readable=False)
 
 
 def get_text_stderr(encoding: str | None = None, errors: str | None = None) -> t.TextIO:
-    rv = _get_windows_console_stream(sys.stderr, encoding, errors)
-    if rv is not None:
-        return rv
-    return _force_correct_text_writer(sys.stderr, encoding, errors, force_writable=True)
+    return _get_text_stream(sys.stderr, encoding, errors, readable=False)
 
 
 def _wrap_io_open(

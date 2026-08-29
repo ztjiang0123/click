@@ -63,6 +63,96 @@ class TextWrapper(textwrap.TextWrapper):
         elif not cur_line:
             cur_line.append(reversed_chunks.pop())
 
+    def _check_placeholder_fits(self) -> None:
+        """Raise if the placeholder cannot fit alongside the active indent.
+
+        Only relevant when :attr:`max_lines` limits the output; mirrors the
+        guard at the top of :meth:`textwrap.TextWrapper._wrap_chunks`.
+        """
+        if self.max_lines is None:
+            return
+
+        if self.max_lines > 1:
+            indent = self.subsequent_indent
+        else:
+            indent = self.initial_indent
+
+        if term_len(indent) + term_len(self.placeholder.lstrip()) > self.width:
+            raise ValueError("placeholder too large for max width")
+
+    def _fill_line(self, chunks: list[str], width: int) -> tuple[list[str], int]:
+        """Pop chunks onto a single line until the next one would overflow.
+
+        Returns the accumulated line pieces and their visible length, after
+        applying long-word handling and trailing-whitespace dropping.
+        """
+        cur_line: list[str] = []
+        cur_len = 0
+
+        while chunks:
+            n = term_len(chunks[-1])
+
+            if cur_len + n <= width:
+                cur_line.append(chunks.pop())
+                cur_len += n
+            else:
+                break
+
+        if chunks and term_len(chunks[-1]) > width:
+            self._handle_long_word(chunks, cur_line, cur_len, width)
+            cur_len = sum(map(term_len, cur_line))
+
+        if self.drop_whitespace and cur_line and cur_line[-1].strip() == "":
+            cur_len -= term_len(cur_line[-1])
+            del cur_line[-1]
+
+        return cur_line, cur_len
+
+    def _line_fits_in_max_lines(
+        self, lines: list[str], chunks: list[str], cur_len: int, width: int
+    ) -> bool:
+        """Decide whether the current line can be emitted as-is.
+
+        ``True`` when :attr:`max_lines` is unset, another line still remains in
+        the budget, or this is the final line and its content fits.
+        """
+        if self.max_lines is None:
+            return True
+
+        if len(lines) + 1 < self.max_lines:
+            return True
+
+        is_last_meaningful_chunk = not chunks or (
+            self.drop_whitespace and len(chunks) == 1 and not chunks[0].strip()
+        )
+        return is_last_meaningful_chunk and cur_len <= width
+
+    def _append_truncated_line(
+        self, lines: list[str], indent: str, cur_line: list[str], cur_len: int
+    ) -> None:
+        """Emit the final line ending in the placeholder when truncating.
+
+        Drops trailing pieces until the placeholder fits, or falls back to
+        appending it to the previous line / on a line of its own.
+        """
+        width = self.width - term_len(indent)
+
+        while cur_line:
+            if cur_line[-1].strip() and cur_len + term_len(self.placeholder) <= width:
+                cur_line.append(self.placeholder)
+                lines.append(indent + "".join(cur_line))
+                return
+            cur_len -= term_len(cur_line[-1])
+            del cur_line[-1]
+
+        if lines:
+            prev_line = lines[-1].rstrip()
+            if term_len(prev_line) + term_len(self.placeholder) <= self.width:
+                lines[-1] = prev_line + self.placeholder
+                return
+
+        lines.append(indent + self.placeholder.lstrip())
+
     def _wrap_chunks(self, chunks: list[str]) -> list[str]:
         """Wrap chunks counting widths in visible characters.
 
@@ -78,23 +168,15 @@ class TextWrapper(textwrap.TextWrapper):
             Reference implementation in CPython:
             https://github.com/python/cpython/blob/main/Lib/textwrap.py
         """
-        lines: list[str] = []
         if self.width <= 0:
             raise ValueError(f"invalid width {self.width!r} (must be > 0)")
-        if self.max_lines is not None:
-            if self.max_lines > 1:
-                indent = self.subsequent_indent
-            else:
-                indent = self.initial_indent
-            if term_len(indent) + term_len(self.placeholder.lstrip()) > self.width:
-                raise ValueError("placeholder too large for max width")
 
+        self._check_placeholder_fits()
+
+        lines: list[str] = []
         chunks.reverse()
 
         while chunks:
-            cur_line: list[str] = []
-            cur_len = 0
-
             if lines:
                 indent = self.subsequent_indent
             else:
@@ -105,59 +187,16 @@ class TextWrapper(textwrap.TextWrapper):
             if self.drop_whitespace and chunks[-1].strip() == "" and lines:
                 del chunks[-1]
 
-            while chunks:
-                n = term_len(chunks[-1])
+            cur_line, cur_len = self._fill_line(chunks, width)
 
-                if cur_len + n <= width:
-                    cur_line.append(chunks.pop())
-                    cur_len += n
+            if not cur_line:
+                continue
 
-                else:
-                    break
-
-            if chunks and term_len(chunks[-1]) > width:
-                self._handle_long_word(chunks, cur_line, cur_len, width)
-                cur_len = sum(map(term_len, cur_line))
-
-            if self.drop_whitespace and cur_line and cur_line[-1].strip() == "":
-                cur_len -= term_len(cur_line[-1])
-                del cur_line[-1]
-
-            if cur_line:
-                if (
-                    self.max_lines is None
-                    or len(lines) + 1 < self.max_lines
-                    or (
-                        not chunks
-                        or self.drop_whitespace
-                        and len(chunks) == 1
-                        and not chunks[0].strip()
-                    )
-                    and cur_len <= width
-                ):
-                    lines.append(indent + "".join(cur_line))
-                else:
-                    while cur_line:
-                        if (
-                            cur_line[-1].strip()
-                            and cur_len + term_len(self.placeholder) <= width
-                        ):
-                            cur_line.append(self.placeholder)
-                            lines.append(indent + "".join(cur_line))
-                            break
-                        cur_len -= term_len(cur_line[-1])
-                        del cur_line[-1]
-                    else:
-                        if lines:
-                            prev_line = lines[-1].rstrip()
-                            if (
-                                term_len(prev_line) + term_len(self.placeholder)
-                                <= self.width
-                            ):
-                                lines[-1] = prev_line + self.placeholder
-                                break
-                        lines.append(indent + self.placeholder.lstrip())
-                    break
+            if self._line_fits_in_max_lines(lines, chunks, cur_len, width):
+                lines.append(indent + "".join(cur_line))
+            else:
+                self._append_truncated_line(lines, indent, cur_line, cur_len)
+                break
 
         return lines
 

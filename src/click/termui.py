@@ -743,22 +743,24 @@ def style(
     if bg is not None:
         bits.append(f"\033[{_interpret_color(bg, 10)}m")
 
-    if bold is not None:
-        bits.append(f"\033[{1 if bold else 22}m")
-    if dim is not None:
-        bits.append(f"\033[{2 if dim else 22}m")
-    if underline is not None:
-        bits.append(f"\033[{4 if underline else 24}m")
-    if overline is not None:
-        bits.append(f"\033[{53 if overline else 55}m")
-    if italic is not None:
-        bits.append(f"\033[{3 if italic else 23}m")
-    if blink is not None:
-        bits.append(f"\033[{5 if blink else 25}m")
-    if reverse is not None:
-        bits.append(f"\033[{7 if reverse else 27}m")
-    if strikethrough is not None:
-        bits.append(f"\033[{9 if strikethrough else 29}m")
+    # Each toggle maps to the ANSI code that enables it and the one that
+    # disables it. Iterating a table keeps the branch count flat instead of
+    # growing one ``if`` per attribute.
+    toggles: tuple[tuple[bool | None, int, int], ...] = (
+        (bold, 1, 22),
+        (dim, 2, 22),
+        (underline, 4, 24),
+        (overline, 53, 55),
+        (italic, 3, 23),
+        (blink, 5, 25),
+        (reverse, 7, 27),
+        (strikethrough, 9, 29),
+    )
+
+    for enabled, on_code, off_code in toggles:
+        if enabled is not None:
+            bits.append(f"\033[{on_code if enabled else off_code}m")
+
     bits.append(text)
     if reset:
         bits.append(_ansi_reset_all)
