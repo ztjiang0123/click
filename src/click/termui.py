@@ -638,19 +638,26 @@ def _interpret_color(color: int | tuple[int, int, int] | str, offset: int = 0) -
     raise ValueError(_("Unknown color {colour!r}").format(colour=color))
 
 
+# Attribute toggles accepted by :func:`style` as keyword arguments, mapping
+# each name to the ANSI code that enables it and the one that disables it.
+_STYLE_TOGGLES: dict[str, tuple[int, int]] = {
+    "bold": (1, 22),
+    "dim": (2, 22),
+    "underline": (4, 24),
+    "overline": (53, 55),
+    "italic": (3, 23),
+    "blink": (5, 25),
+    "reverse": (7, 27),
+    "strikethrough": (9, 29),
+}
+
+
 def style(
     text: t.Any,
     fg: int | tuple[int, int, int] | str | None = None,
     bg: int | tuple[int, int, int] | str | None = None,
-    bold: bool | None = None,
-    dim: bool | None = None,
-    underline: bool | None = None,
-    overline: bool | None = None,
-    italic: bool | None = None,
-    blink: bool | None = None,
-    reverse: bool | None = None,
-    strikethrough: bool | None = None,
     reset: bool = True,
+    **styles: bool | None,
 ) -> str:
     """Styles a text with ANSI styles and returns the new string.  By
     default the styling is self contained which means that at the end
@@ -715,7 +722,10 @@ def style(
 
     .. versionchanged:: 8.5.0
         All invalid color values raise :exc:`ValueError`. 256-color index
-        ``0`` is no longer ignored.
+        ``0`` is no longer ignored. The attribute toggles (``bold``, ``dim``,
+        ``underline``, ``overline``, ``italic``, ``blink``, ``reverse``, and
+        ``strikethrough``) are now collected as keyword arguments. Passing an
+        unknown keyword argument raises :exc:`TypeError`.
 
     .. versionchanged:: 8.0
         A non-string ``message`` is converted to a string.
@@ -735,6 +745,12 @@ def style(
     if not isinstance(text, str):
         text = str(text)
 
+    unexpected = set(styles) - _STYLE_TOGGLES.keys()
+
+    if unexpected:
+        name = sorted(unexpected)[0]
+        raise TypeError(f"style() got an unexpected keyword argument {name!r}")
+
     bits = []
 
     if fg is not None:
@@ -744,20 +760,11 @@ def style(
         bits.append(f"\033[{_interpret_color(bg, 10)}m")
 
     # Each toggle maps to the ANSI code that enables it and the one that
-    # disables it. Iterating a table keeps the branch count flat instead of
-    # growing one ``if`` per attribute.
-    toggles: tuple[tuple[bool | None, int, int], ...] = (
-        (bold, 1, 22),
-        (dim, 2, 22),
-        (underline, 4, 24),
-        (overline, 53, 55),
-        (italic, 3, 23),
-        (blink, 5, 25),
-        (reverse, 7, 27),
-        (strikethrough, 9, 29),
-    )
+    # disables it. Iterating the table keeps the branch count flat instead
+    # of growing one ``if`` per attribute.
+    for name, (on_code, off_code) in _STYLE_TOGGLES.items():
+        enabled = styles.get(name)
 
-    for enabled, on_code, off_code in toggles:
         if enabled is not None:
             bits.append(f"\033[{on_code if enabled else off_code}m")
 
