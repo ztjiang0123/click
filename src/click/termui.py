@@ -141,6 +141,7 @@ def prompt(
     default: str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
+    *,
     type: None = None,
     value_proc: None = None,
     prompt_suffix: str = ": ",
@@ -156,6 +157,7 @@ def prompt(
     default: V | str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
+    *,
     type: ParamType[V, str] | type[V] | None = None,
     value_proc: t.Callable[[str], V] | None = None,
     prompt_suffix: str = ": ",
@@ -170,12 +172,7 @@ def prompt(
     default: V | str | None = None,
     hide_input: bool = False,
     confirmation_prompt: bool | str = False,
-    type: ParamType[V, str] | type[V] | None = None,
-    value_proc: t.Callable[[str], V] | None = None,
-    prompt_suffix: str = ": ",
-    show_default: bool | str = True,
-    err: bool = False,
-    show_choices: bool = True,
+    **kwargs: t.Any,
 ) -> V:
     """Prompts a user for input.  This is a convenience function that can
     be used to prompt a user for input later.
@@ -205,6 +202,11 @@ def prompt(
                          For example if type is a Choice of either day or week,
                          show_choices is true and text is "Group by" then the
                          prompt will be "Group by (day, week): ".
+    :param kwargs: The conversion and display-configuration keywords
+        ``type``, ``value_proc``, ``prompt_suffix``, ``show_default``,
+        ``err``, and ``show_choices`` are accepted here. They travel together
+        and are grouped into ``**kwargs`` to keep the signature short. Any
+        other keyword raises :exc:`TypeError`.
 
     .. versionchanged:: 8.5.0
         Generically typed: the return type is narrowed by ``type``,
@@ -231,6 +233,23 @@ def prompt(
         Added the `err` parameter.
 
     """
+    # The conversion and display-configuration values travel together and are
+    # pulled out of ``kwargs`` so the public signature stays short while
+    # keeping full backward compatibility for callers passing them by keyword.
+    # Any other unexpected keyword raises ``TypeError``, matching a normal
+    # signature.
+    param_type: ParamType[V, str] | type[V] | None = kwargs.pop("type", None)
+    value_proc: t.Callable[[str], V] | None = kwargs.pop("value_proc", None)
+    prompt_suffix: str = kwargs.pop("prompt_suffix", ": ")
+    show_default: bool | str = kwargs.pop("show_default", True)
+    err: bool = kwargs.pop("err", False)
+    show_choices: bool = kwargs.pop("show_choices", True)
+
+    if kwargs:
+        raise TypeError(
+            "prompt() got unexpected keyword argument(s):"
+            f" {', '.join(map(repr, kwargs))}"
+        )
 
     def prompt_func(text: str) -> str:
         f = hidden_prompt_func if hide_input else visible_prompt_func
@@ -245,10 +264,10 @@ def prompt(
             raise Abort() from None
 
     if value_proc is None:
-        value_proc = convert_type(type, default)
+        value_proc = convert_type(param_type, default)
 
     prompt = _build_prompt(
-        text, prompt_suffix, show_default, default, show_choices, type
+        text, prompt_suffix, show_default, default, show_choices, param_type
     )
 
     if confirmation_prompt:
@@ -423,6 +442,7 @@ def progressbar(
 def progressbar(
     iterable: cabc.Iterable[V] | None = None,
     length: int | None = None,
+    *,
     label: str | None = None,
     hidden: bool = False,
     show_eta: bool = True,
@@ -443,20 +463,7 @@ def progressbar(
 def progressbar(
     iterable: cabc.Iterable[V] | None = None,
     length: int | None = None,
-    label: str | None = None,
-    hidden: bool = False,
-    show_eta: bool = True,
-    show_percent: bool | None = None,
-    show_pos: bool = False,
-    item_show_func: t.Callable[[V | None], str | None] | None = None,
-    fill_char: str = "#",
-    empty_char: str = "-",
-    bar_template: str = "%(label)s  [%(bar)s]  %(info)s",
-    info_sep: str = "  ",
-    width: int = 36,
-    file: t.TextIO | None = None,
-    color: bool | None = None,
-    update_min_steps: int = 1,
+    **kwargs: t.Any,
 ) -> ProgressBar[V]:
     """This function creates an iterable context manager that can be used
     to iterate over something while showing a progress bar.  It will
@@ -554,6 +561,13 @@ def progressbar(
                   which is not the case by default.
     :param update_min_steps: Render only when this many updates have
         completed. This allows tuning for very fast iterators.
+    :param kwargs: The remaining display-configuration keywords —
+        ``label``, ``hidden``, ``show_eta``, ``show_percent``, ``show_pos``,
+        ``item_show_func``, ``fill_char``, ``empty_char``, ``bar_template``,
+        ``info_sep``, ``width``, ``file``, ``color``, and
+        ``update_min_steps`` — are accepted here. They travel together and
+        are grouped into ``**kwargs`` to keep the signature short. Any other
+        keyword raises :exc:`TypeError`.
 
     .. versionadded:: 8.2
         The ``hidden`` argument.
@@ -577,6 +591,33 @@ def progressbar(
     .. versionadded:: 2.0
     """
     from ._termui_impl import ProgressBar
+
+    # The rendering/display values travel together and are pulled out of
+    # ``kwargs`` so the public signature stays short while keeping full
+    # backward compatibility for callers passing them by keyword. Any other
+    # unexpected keyword raises ``TypeError``, matching a normal signature.
+    label: str | None = kwargs.pop("label", None)
+    hidden: bool = kwargs.pop("hidden", False)
+    show_eta: bool = kwargs.pop("show_eta", True)
+    show_percent: bool | None = kwargs.pop("show_percent", None)
+    show_pos: bool = kwargs.pop("show_pos", False)
+    item_show_func: t.Callable[[V | None], str | None] | None = kwargs.pop(
+        "item_show_func", None
+    )
+    fill_char: str = kwargs.pop("fill_char", "#")
+    empty_char: str = kwargs.pop("empty_char", "-")
+    bar_template: str = kwargs.pop("bar_template", "%(label)s  [%(bar)s]  %(info)s")
+    info_sep: str = kwargs.pop("info_sep", "  ")
+    width: int = kwargs.pop("width", 36)
+    file: t.TextIO | None = kwargs.pop("file", None)
+    color: bool | None = kwargs.pop("color", None)
+    update_min_steps: int = kwargs.pop("update_min_steps", 1)
+
+    if kwargs:
+        raise TypeError(
+            "progressbar() got unexpected keyword argument(s):"
+            f" {', '.join(map(repr, kwargs))}"
+        )
 
     color = resolve_color_default(color)
     return ProgressBar(
