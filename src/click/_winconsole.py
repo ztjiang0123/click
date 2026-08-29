@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import io
+import msvcrt
 import sys
 import time
 import typing as t
@@ -24,6 +25,8 @@ from ctypes import c_void_p
 from ctypes import POINTER
 from ctypes import py_object
 from ctypes import Structure
+from ctypes import windll
+from ctypes import WINFUNCTYPE
 from ctypes.wintypes import DWORD
 from ctypes.wintypes import HANDLE
 from ctypes.wintypes import LPCWSTR
@@ -33,9 +36,6 @@ from gettext import gettext as _
 from ._compat import _NonClosingTextIOWrapper
 
 assert sys.platform == "win32"
-import msvcrt  # noqa: E402
-from ctypes import windll  # noqa: E402
-from ctypes import WINFUNCTYPE  # noqa: E402
 
 c_ssize_p = POINTER(c_ssize_t)
 

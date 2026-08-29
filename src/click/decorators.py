@@ -418,6 +418,70 @@ def password_option(*param_decls: str, **kwargs: t.Any) -> t.Callable[[FC], FC]:
     return option(*param_decls, **kwargs)
 
 
+def _detect_caller_package_name() -> str | None:
+    """Inspects the calling stack frame to guess the top-level package name
+    for :func:`version_option` when neither ``version`` nor ``package_name``
+    was supplied.
+    """
+    frame = inspect.currentframe()
+    # Walk one extra frame past this helper to reach version_option's caller.
+    caller = frame.f_back if frame is not None else None
+    f_back = caller.f_back if caller is not None else None
+    f_globals = f_back.f_globals if f_back is not None else None
+    # break reference cycle
+    # https://docs.python.org/3/library/inspect.html#the-interpreter-stack
+    del frame, caller
+
+    if f_globals is None:
+        return None
+
+    package_name = f_globals.get("__name__")
+
+    if package_name == "__main__":
+        package_name = f_globals.get("__package__")
+
+    if package_name:
+        package_name = package_name.partition(".")[0]
+
+    return package_name
+
+
+def _detect_version(package_name: str) -> tuple[str | None, str]:
+    """Resolves the installed version for ``package_name``.
+
+    Returns the ``(version, package_name)`` pair, where ``package_name`` may
+    be rewritten to the distribution name when the given name is an import
+    (top-level module) name instead. ``version`` is ``None`` when it could
+    not be determined.
+    """
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version(package_name), package_name
+    except importlib.metadata.PackageNotFoundError:
+        pass
+
+    # The given name didn't match an installed distribution. Try resolving
+    # it as an import (top-level module) name, e.g. ``PIL`` is provided by
+    # the ``Pillow`` distribution.
+    distributions = importlib.metadata.packages_distributions().get(package_name, [])
+
+    if len(distributions) > 1:
+        raise RuntimeError(
+            f"{package_name!r} maps to multiple installed"
+            f" distributions ({', '.join(distributions)})."
+            " Pass 'package_name' to disambiguate."
+        ) from None
+
+    if not distributions:
+        raise RuntimeError(
+            f"{package_name!r} is not installed. Try passing 'package_name' instead."
+        ) from None
+
+    package_name = distributions[0]
+    return importlib.metadata.version(package_name), package_name
+
+
 def version_option(
     version: str | None = None,
     *param_decls: str,
@@ -482,21 +546,7 @@ def version_option(
         message = _("%(prog)s, version %(version)s")
 
     if version is None and package_name is None:
-        frame = inspect.currentframe()
-        f_back = frame.f_back if frame is not None else None
-        f_globals = f_back.f_globals if f_back is not None else None
-        # break reference cycle
-        # https://docs.python.org/3/library/inspect.html#the-interpreter-stack
-        del frame
-
-        if f_globals is not None:
-            package_name = f_globals.get("__name__")
-
-            if package_name == "__main__":
-                package_name = f_globals.get("__package__")
-
-            if package_name:
-                package_name = package_name.partition(".")[0]
+        package_name = _detect_caller_package_name()
 
     def callback(ctx: Context, param: Parameter, value: bool) -> None:
         if not value or ctx.resilient_parsing:
@@ -510,31 +560,7 @@ def version_option(
             prog_name = ctx.find_root().info_name
 
         if version is None and package_name is not None:
-            import importlib.metadata
-
-            try:
-                version = importlib.metadata.version(package_name)
-            except importlib.metadata.PackageNotFoundError:
-                # The given name didn't match an installed distribution.
-                # Try resolving it as an import (top-level module) name,
-                # e.g. ``PIL`` is provided by the ``Pillow`` distribution.
-                distributions = importlib.metadata.packages_distributions().get(
-                    package_name, []
-                )
-                if len(distributions) == 1:
-                    package_name = distributions[0]
-                    version = importlib.metadata.version(package_name)
-                elif len(distributions) > 1:
-                    raise RuntimeError(
-                        f"{package_name!r} maps to multiple installed"
-                        f" distributions ({', '.join(distributions)})."
-                        " Pass 'package_name' to disambiguate."
-                    ) from None
-                else:
-                    raise RuntimeError(
-                        f"{package_name!r} is not installed. Try passing"
-                        " 'package_name' instead."
-                    ) from None
+            version, package_name = _detect_version(package_name)
 
         if version is None:
             raise RuntimeError(
