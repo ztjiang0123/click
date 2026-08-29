@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import contextlib
+import dataclasses
 import io
 import os
 import pdb
@@ -27,6 +28,33 @@ if sys.platform == "win32":
 else:
     CaptureMode: t.TypeAlias = t.Literal["sys", "fd"]  # pyright: ignore[reportRedeclaration]
 ExceptionInfo: t.TypeAlias = tuple[type[BaseException], BaseException, TracebackType]
+
+
+@dataclasses.dataclass
+class Invocation:
+    """Options for a single :meth:`CliRunner.invoke` call.
+
+    These values configure the isolated environment and error handling
+    for the invocation. They are grouped together so :meth:`CliRunner.invoke`
+    does not need to accept them as separate parameters. Any of them may
+    still be passed to :meth:`~CliRunner.invoke` as keyword arguments for
+    backwards compatibility.
+
+    :param input: the input data for ``sys.stdin``.
+    :param env: the environment overrides.
+    :param catch_exceptions: Whether to catch any other exceptions than
+        ``SystemExit``. If :data:`None`, the value from :class:`CliRunner`
+        is used.
+    :param color: whether the output should contain color codes. The
+        application can still override this explicitly.
+
+    .. versionadded:: 8.5.0
+    """
+
+    input: str | bytes | t.IO[t.Any] | None = None
+    env: cabc.Mapping[str, str | None] | None = None
+    catch_exceptions: bool | None = None
+    color: bool = False
 
 
 class EchoingStdin:
@@ -594,14 +622,36 @@ class CliRunner:
             formatting.FORCED_WIDTH = old_forced_width
             pdb.Pdb.__init__ = old_pdb_init  # type: ignore[method-assign]
 
+    @staticmethod
+    def _resolve_invocation(
+        invocation: Invocation | None, extra: dict[str, t.Any]
+    ) -> Invocation:
+        """Build the :class:`Invocation` for :meth:`invoke`.
+
+        Legacy keyword arguments (``input``, ``env``, ``catch_exceptions``,
+        and ``color``) are popped out of ``extra`` so they are not forwarded
+        to :meth:`~clickpkg.Command.main`. When given, they override the
+        matching field on ``invocation``.
+        """
+        if invocation is None:
+            invocation = Invocation()
+
+        overrides = {
+            field.name: extra.pop(field.name)
+            for field in dataclasses.fields(Invocation)
+            if field.name in extra
+        }
+
+        if overrides:
+            invocation = dataclasses.replace(invocation, **overrides)
+
+        return invocation
+
     def invoke(
         self,
         cli: Command,
         args: str | cabc.Sequence[str] | None = None,
-        input: str | bytes | t.IO[t.Any] | None = None,
-        env: cabc.Mapping[str, str | None] | None = None,
-        catch_exceptions: bool | None = None,
-        color: bool = False,
+        invocation: Invocation | None = None,
         **extra: t.Any,
     ) -> Result:
         """Invokes a command in an isolated environment.  The arguments are
@@ -616,14 +666,18 @@ class CliRunner:
                      or a string. When given as string it will be interpreted
                      as a Unix shell command. More details at
                      :func:`shlex.split`.
-        :param input: the input data for `sys.stdin`.
-        :param env: the environment overrides.
-        :param catch_exceptions: Whether to catch any other exceptions than
-                                 ``SystemExit``. If :data:`None`, the value
-                                 from :class:`CliRunner` is used.
+        :param invocation: an :class:`Invocation` bundling the ``input``,
+                           ``env``, ``catch_exceptions``, and ``color``
+                           options. For backwards compatibility these may
+                           instead be passed as individual keyword arguments,
+                           which take precedence over the bundle.
         :param extra: the keyword arguments to pass to :meth:`main`.
-        :param color: whether the output should contain color codes. The
-                      application can still override this explicitly.
+
+        .. versionchanged:: 8.5.0
+            The ``input``, ``env``, ``catch_exceptions``, and ``color``
+            parameters are grouped into the :class:`Invocation` object
+            passed as ``invocation``. They remain accepted as keyword
+            arguments for backwards compatibility.
 
         .. versionadded:: 8.2
             The result object has the ``output_bytes`` attribute with
@@ -647,6 +701,9 @@ class CliRunner:
             The result object has the ``exc_info`` attribute with the
             traceback if available.
         """
+        invocation = self._resolve_invocation(invocation, extra)
+        catch_exceptions = invocation.catch_exceptions
+
         exc_info = None
         if catch_exceptions is None:
             catch_exceptions = self.catch_exceptions
@@ -664,7 +721,9 @@ class CliRunner:
             except OSError:
                 cap_out = cap_err = None
 
-        with self.isolation(input=input, env=env, color=color) as outstreams:
+        with self.isolation(
+            input=invocation.input, env=invocation.env, color=invocation.color
+        ) as outstreams:
             # Point the captured streams' fileno() at the saved (original)
             # fd so that C-level consumers like faulthandler keep working
             # while fd 1/2 are redirected to the capture tmpfile.
