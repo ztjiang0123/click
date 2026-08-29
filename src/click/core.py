@@ -1532,13 +1532,7 @@ class Command:
         .. versionchanged:: 3.0
            Added the ``standalone_mode`` parameter.
         """
-        if args is None:
-            args = sys.argv[1:]
-
-            if os.name == "nt" and windows_expand_args:
-                args = _expand_args(args)
-        else:
-            args = list(args)
+        args = self._resolve_main_args(args, windows_expand_args)
 
         if prog_name is None:
             prog_name = _detect_program_name()
@@ -1547,52 +1541,86 @@ class Command:
         self._main_shell_completion(extra, prog_name, complete_var)
 
         try:
-            try:
-                with self.make_context(prog_name, args, **extra) as ctx:
-                    rv = self.invoke(ctx)
-                    if not standalone_mode:
-                        return rv
-                    # it's not safe to `ctx.exit(rv)` here!
-                    # note that `rv` may actually contain data like "1" which
-                    # has obvious effects
-                    # more subtle case: `rv=[None, None]` can come out of
-                    # chained commands which all returned `None` -- so it's not
-                    # even always obvious that `rv` indicates success/failure
-                    # by its truthiness/falsiness
-                    ctx.exit()
-            except (EOFError, KeyboardInterrupt) as e:
-                echo(file=sys.stderr)
-                raise Abort() from e
-            except ClickException as e:
-                if not standalone_mode:
-                    raise
-                e.show()
-                sys.exit(e.exit_code)
-            except OSError as e:
-                if e.errno == errno.EPIPE:
-                    sys.stdout = t.cast(t.TextIO, _PacifyFlushWrapper(sys.stdout))
-                    sys.stderr = t.cast(t.TextIO, _PacifyFlushWrapper(sys.stderr))
-                    sys.exit(1)
-                else:
-                    raise
+            return self._run_standalone(prog_name, args, standalone_mode, extra)
         except Exit as e:
             if standalone_mode:
                 sys.exit(e.exit_code)
-            else:
-                # in non-standalone mode, return the exit code
-                # note that this is only reached if `self.invoke` above raises
-                # an Exit explicitly -- thus bypassing the check there which
-                # would return its result
-                # the results of non-standalone execution may therefore be
-                # somewhat ambiguous: if there are codepaths which lead to
-                # `ctx.exit(1)` and to `return 1`, the caller won't be able to
-                # tell the difference between the two
-                return e.exit_code
+
+            # in non-standalone mode, return the exit code
+            # note that this is only reached if `self.invoke` above raises
+            # an Exit explicitly -- thus bypassing the check there which
+            # would return its result
+            # the results of non-standalone execution may therefore be
+            # somewhat ambiguous: if there are codepaths which lead to
+            # `ctx.exit(1)` and to `return 1`, the caller won't be able to
+            # tell the difference between the two
+            return e.exit_code
         except Abort:
             if not standalone_mode:
                 raise
             echo(_("Aborted!"), file=sys.stderr)
             sys.exit(1)
+
+    @staticmethod
+    def _resolve_main_args(
+        args: cabc.Sequence[str] | None, windows_expand_args: bool
+    ) -> list[str]:
+        """Normalize the argument list for :meth:`main`.
+
+        Falls back to ``sys.argv[1:]`` (with Windows glob/var expansion when
+        enabled) or copies the caller-supplied sequence into a list.
+        """
+        if args is not None:
+            return list(args)
+
+        args = sys.argv[1:]
+
+        if os.name == "nt" and windows_expand_args:
+            return _expand_args(args)
+
+        return list(args)
+
+    def _run_standalone(
+        self,
+        prog_name: str,
+        args: list[str],
+        standalone_mode: bool,
+        extra: dict[str, t.Any],
+    ) -> t.Any:
+        """Build the context, invoke the command, and translate the errors
+        that :meth:`main` reports to the user.
+
+        Lets :exc:`Exit` and :exc:`Abort` propagate to :meth:`main`, which owns
+        the standalone-vs-return decision for those.
+        """
+        try:
+            with self.make_context(prog_name, args, **extra) as ctx:
+                rv = self.invoke(ctx)
+                if not standalone_mode:
+                    return rv
+                # it's not safe to `ctx.exit(rv)` here!
+                # note that `rv` may actually contain data like "1" which
+                # has obvious effects
+                # more subtle case: `rv=[None, None]` can come out of
+                # chained commands which all returned `None` -- so it's not
+                # even always obvious that `rv` indicates success/failure
+                # by its truthiness/falsiness
+                ctx.exit()
+        except (EOFError, KeyboardInterrupt) as e:
+            echo(file=sys.stderr)
+            raise Abort() from e
+        except ClickException as e:
+            if not standalone_mode:
+                raise
+            e.show()
+            sys.exit(e.exit_code)
+        except OSError as e:
+            if e.errno == errno.EPIPE:
+                sys.stdout = t.cast(t.TextIO, _PacifyFlushWrapper(sys.stdout))
+                sys.stderr = t.cast(t.TextIO, _PacifyFlushWrapper(sys.stderr))
+                sys.exit(1)
+            else:
+                raise
 
     def _main_shell_completion(
         self,

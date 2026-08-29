@@ -224,9 +224,11 @@ class ConsoleStream:
         return f"<ConsoleStream name={self.name!r} encoding={self.encoding!r}>"
 
 
-def _get_text_stdin(buffer_stream: t.BinaryIO) -> t.TextIO:
+def _get_text_console_stream(
+    buffer_stream: t.BinaryIO, raw_buffer: t.BinaryIO
+) -> t.TextIO:
     text_stream = _NonClosingTextIOWrapper(
-        io.BufferedReader(_WindowsConsoleReader(STDIN_HANDLE)),
+        raw_buffer,
         "utf-16-le",
         "strict",
         line_buffering=True,
@@ -234,30 +236,12 @@ def _get_text_stdin(buffer_stream: t.BinaryIO) -> t.TextIO:
     return t.cast(t.TextIO, ConsoleStream(text_stream, buffer_stream))
 
 
-def _get_text_stdout(buffer_stream: t.BinaryIO) -> t.TextIO:
-    text_stream = _NonClosingTextIOWrapper(
-        io.BufferedWriter(_WindowsConsoleWriter(STDOUT_HANDLE)),
-        "utf-16-le",
-        "strict",
-        line_buffering=True,
-    )
-    return t.cast(t.TextIO, ConsoleStream(text_stream, buffer_stream))
-
-
-def _get_text_stderr(buffer_stream: t.BinaryIO) -> t.TextIO:
-    text_stream = _NonClosingTextIOWrapper(
-        io.BufferedWriter(_WindowsConsoleWriter(STDERR_HANDLE)),
-        "utf-16-le",
-        "strict",
-        line_buffering=True,
-    )
-    return t.cast(t.TextIO, ConsoleStream(text_stream, buffer_stream))
-
-
-_stream_factories: cabc.Mapping[int, t.Callable[[t.BinaryIO], t.TextIO]] = {
-    0: _get_text_stdin,
-    1: _get_text_stdout,
-    2: _get_text_stderr,
+# Per-fileno factories for the raw console buffer feeding the text stream. stdin
+# reads through a console reader; stdout/stderr write through a console writer.
+_raw_buffer_factories: cabc.Mapping[int, t.Callable[[], t.BinaryIO]] = {
+    0: lambda: io.BufferedReader(_WindowsConsoleReader(STDIN_HANDLE)),
+    1: lambda: io.BufferedWriter(_WindowsConsoleWriter(STDOUT_HANDLE)),
+    2: lambda: io.BufferedWriter(_WindowsConsoleWriter(STDERR_HANDLE)),
 }
 
 
@@ -285,8 +269,8 @@ def _get_windows_console_stream(
     ):
         return None
 
-    func = _stream_factories.get(f.fileno())
-    if func is None:
+    raw_buffer_factory = _raw_buffer_factories.get(f.fileno())
+    if raw_buffer_factory is None:
         return None
 
     b = getattr(f, "buffer", None)
@@ -294,4 +278,4 @@ def _get_windows_console_stream(
     if b is None:
         return None
 
-    return func(b)
+    return _get_text_console_stream(b, raw_buffer_factory())
